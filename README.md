@@ -1,7 +1,7 @@
 # pycoreaudio
 A Python module written in C++, which allows basic operations with CoreAudio like changing the volume level or mute state.
 
-⚠️ This module only works on macOS!
+⚠️ This module only works on macOS!  
 ⚠️ Apple Silicon compatibility is not tested/guaranteed, as I don't own such a device right now.
 Tested on macOS Monterey with Intel CPU.
 
