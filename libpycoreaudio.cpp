@@ -46,6 +46,13 @@ namespace properties {
         kAudioObjectPropertyScopeGlobal,
         kAudioObjectPropertyElementMain
     };
+    
+    //Device manufacturer
+    const AudioObjectPropertyAddress manufacturer = {
+        kAudioDevicePropertyDeviceManufacturerCFString,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
     //Device input streams
     const AudioObjectPropertyAddress instreams = {
         kAudioDevicePropertyStreams,
@@ -55,6 +62,12 @@ namespace properties {
     //Device output streams
     const AudioObjectPropertyAddress outstreams = {
         kAudioDevicePropertyStreams,
+        kAudioDevicePropertyScopeOutput,
+        0
+    };
+    //Device UID
+    const AudioObjectPropertyAddress uid = {
+        kAudioDevicePropertyDeviceUID,
         kAudioDevicePropertyScopeOutput,
         0
     };
@@ -222,6 +235,10 @@ PyObject* cppstring_to_pystr(std::string str){
     return Py_BuildValue("s", str.c_str());
 }
 
+PyObject* cstring_to_pystr(const char* str){
+    return Py_BuildValue("s", str);
+}
+
 /**
  * Set the mute state of the default output device.
  * 
@@ -324,6 +341,40 @@ std::string getDeviceName(AudioDeviceID device){
     return name;
 }
 
+std::string getDeviceManufacturer(AudioDeviceID device){
+    UInt32 propSize = sizeof(CFStringRef);
+    CFStringRef result;
+    OSStatus error = AudioObjectGetPropertyData(device, &properties::manufacturer, 0, NULL, &propSize, &result);
+    if(error != noErr){
+        return (std::string)"Unknown";
+    }
+    char* str = CFStringToCString(result);
+    if(str == NULL){
+        free(str);
+        return (std::string)"Unknown";
+    }
+    std::string name(str);
+    free(str);
+    return name;
+}
+
+std::string getDeviceUID(AudioDeviceID device){
+    UInt32 propSize = sizeof(CFStringRef);
+    CFStringRef result;
+    OSStatus error = AudioObjectGetPropertyData(device, &properties::uid, 0, NULL, &propSize, &result);
+    if(error != noErr){
+        return (std::string)"Unknown";
+    }
+    char* str = CFStringToCString(result);
+    if(str == NULL){
+        free(str);
+        return (std::string)"Unknown";
+    }
+    std::string name(str);
+    free(str);
+    return name;
+}
+
 int getDeviceStreamCount(AudioDeviceID device, AudioObjectPropertyAddress io_direction){
     UInt32 dataSize = 0;
     OSStatus error = AudioObjectGetPropertyDataSize(device, &io_direction, 0, NULL, &dataSize);
@@ -404,19 +455,23 @@ static PyObject* PyCoreAudio_getDevices(PyObject* self, PyObject* _){
     propSize = sizeof(CFStringRef);
     for(int i = 0; i < numDevices; i++){
         std::string name = getDeviceName(audioDevices[i]);
+        std::string manufacturer = getDeviceManufacturer(audioDevices[i]);
+        std::string uid = getDeviceUID(audioDevices[i]);
         int in_streams = getDeviceStreamCount(audioDevices[i], properties::instreams);
         int out_streams = getDeviceStreamCount(audioDevices[i], properties::outstreams);
         bool isMic = in_streams > 0;
         bool isSpeaker = out_streams > 0;
-        
-        PyObject* props = PyDict_New(); PyDict_Clear(props);
-        PyDict_SetItemString(props, "name", cppstring_to_pystr(name));
-        PyDict_SetItemString(props, "inputs", PyLong_FromLong((long)in_streams));
-        PyDict_SetItemString(props, "outputs", PyLong_FromLong((long)out_streams));
-        PyDict_SetItemString(props, "isMicrophone", PyBool_FromBool(isMic));
-        PyDict_SetItemString(props, "isSpeaker", PyBool_FromBool(isSpeaker));
 
-        PyTuple_SetItem(res, i, props);
+
+        PyTuple_SetItem(res, i, Py_BuildValue("(s, s, s, i, i, N, N)",
+            name.c_str(),
+            manufacturer.c_str(),
+            uid.c_str(),
+            in_streams,
+            out_streams,
+            PyBool_FromBool(isMic),
+            PyBool_FromBool(isSpeaker)
+            ));
     }
     free(audioDevices);
     return res;
@@ -533,9 +588,10 @@ static PyMethodDef PyCoreAudioMethods[] = {
     
     {"getDevices", PyCoreAudio_getDevices, METH_NOARGS,
         "Get all audio input and output devices available on this system along with\n"
-        "some of their properties. Returns a tuple of dictionaries. The dictionaries\n"
-        "include: name of the device, number of input streams, number of output\n"
-        "streams, whether the device is a microphone, whether the device is a speaker.\n"
+        "some of their properties. Returns a tuple of tuples.\n"
+        "The tuples are structured like this:\n"
+        "(name, manufacturer, uid, number of input streams, number of output streams,\n"
+        "isMicrophone, isSpeaker).\n"
         "Keep in mind that a single device can have both input and output streams.\n"
         "In such a case, the last two properties will be True.\n"
         "If the module fails to get the name of the device, the value \"Unknown\"\n"
@@ -545,7 +601,7 @@ static PyMethodDef PyCoreAudioMethods[] = {
     {"getCurrentDevice", PyCoreAudio_getCurrentDevice, METH_NOARGS,
         "Get the name of the current audio output device.\n"
         "If the module is not initialized, an exception will be raised."},
-    
+
     {NULL, NULL, 0, NULL}        /* Sentinel */
 };
 
