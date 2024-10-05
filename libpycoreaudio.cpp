@@ -119,11 +119,14 @@ bool init(){
                                                  &properties::defaultOutputDevice,
                                                  0, NULL,
                                                  &dataSize, &defaultOutputDeviceID);
-    if(result != kAudioHardwareNoError) return false;
-
+    //if(result != kAudioHardwareNoError) return false;
+    if(result != kAudioHardwareNoError) {
+    printf("Error getting default output device: %d\n", result);
+    return false;
+}
     //Get a list of valid channels
     validChannelsForDefaultDevice = getValidChannels(&defaultOutputDeviceID);
-    if(validChannelsForDefaultDevice.size() == 0) return false;
+    //if(validChannelsForDefaultDevice.size() == 0) return false;   防止设备是多输出设备时出错
     initialized = true;
     return initialized;
 }
@@ -302,6 +305,80 @@ bool setVolume(int volume_in_percent){
     return setProperty(volume, properties::volume);
 }
 
+/**
+ * Set the volume level of a specified output device.
+ *
+ * @param deviceID - ID of the output device
+ * @param volume_in_percent - volume level (0-100)
+ * @result - whether the set failed or succeeded
+ */
+bool setVolumeForDevice(AudioDeviceID deviceID, int volume_in_percent) {
+    // 使用现有的 setProperty 函数来设置音量
+    Float32 volume = Float32(volume_in_percent) / 100;
+    AudioObjectPropertyAddress propertyAddr = properties::volume;
+    propertyAddr.mElement = 0; // 通常设置为通道 0
+
+    OSStatus result = AudioObjectSetPropertyData(deviceID, &propertyAddr, 0, NULL, sizeof(volume), &volume);
+    return (result == kAudioHardwareNoError);
+}
+
+/**
+ * Get the volume level of a specified output device.
+ *
+ * @param deviceID - ID of the output device
+ * @result - volume level (0-100) or -1 on error
+ */
+int getVolumeForDevice(AudioDeviceID deviceID) {
+    Float32 volume;
+    UInt32 dataSize = sizeof(volume);
+    AudioObjectPropertyAddress propertyAddr = properties::volume;
+    propertyAddr.mElement = 0; // 通常设置为通道 0
+
+    OSStatus result = AudioObjectGetPropertyData(deviceID, &propertyAddr, 0, NULL, &dataSize, &volume);
+    if (result != kAudioHardwareNoError) {
+        return -1; // 失败
+    }
+
+    // 将音量转换为百分比
+    return static_cast<int>(roundf(volume * 100.0f));
+}
+
+/**
+ * Set the mute status of a specified output device.
+ *
+ * @param deviceID - ID of the output device
+ * @param mute - true to mute, false to unmute
+ * @result - whether the set failed or succeeded
+ */
+bool setMuteForDevice(AudioDeviceID deviceID, bool mute) {
+    UInt32 muteValue = mute ? 1 : 0; // 将布尔值转换为整数
+    AudioObjectPropertyAddress propertyAddr = properties::mute;
+    propertyAddr.mElement = 0; // 通常设置为通道 0
+
+    OSStatus result = AudioObjectSetPropertyData(deviceID, &propertyAddr, 0, NULL, sizeof(muteValue), &muteValue);
+    return (result == kAudioHardwareNoError);
+}
+
+/**
+ * Get the mute status of a specified output device.
+ *
+ * @param deviceID - ID of the output device
+ * @result - true if muted, false if not muted, or -1 on error
+ */
+int getMuteForDevice(AudioDeviceID deviceID) {
+    UInt32 muteValue;
+    UInt32 dataSize = sizeof(muteValue);
+    AudioObjectPropertyAddress propertyAddr = properties::mute;
+    propertyAddr.mElement = 0; // 通常设置为通道 0
+
+    OSStatus result = AudioObjectGetPropertyData(deviceID, &propertyAddr, 0, NULL, &dataSize, &muteValue);
+    if (result != kAudioHardwareNoError) {
+        return -1; // 失败
+    }
+
+    return (muteValue == 1) ? 1 : 0; // 返回静音状态
+}
+
 int getDeviceCount(){
     UInt32 propSize;
     AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &properties::count, 0, NULL, &propSize);
@@ -454,6 +531,7 @@ static PyObject* PyCoreAudio_getDevices(PyObject* self, PyObject* _){
     res = PyTuple_New(numDevices);
     propSize = sizeof(CFStringRef);
     for(int i = 0; i < numDevices; i++){
+        //printf("%u\n",audioDevices[i]);
         std::string name = getDeviceName(audioDevices[i]);
         std::string manufacturer = getDeviceManufacturer(audioDevices[i]);
         std::string uid = getDeviceUID(audioDevices[i]);
@@ -461,16 +539,18 @@ static PyObject* PyCoreAudio_getDevices(PyObject* self, PyObject* _){
         int out_streams = getDeviceStreamCount(audioDevices[i], properties::outstreams);
         bool isMic = in_streams > 0;
         bool isSpeaker = out_streams > 0;
+        int devices_id = audioDevices[i];
 
 
-        PyTuple_SetItem(res, i, Py_BuildValue("(s, s, s, i, i, N, N)",
+        PyTuple_SetItem(res, i, Py_BuildValue("(s, s, s, i, i, N, N, i)",
             name.c_str(),
             manufacturer.c_str(),
             uid.c_str(),
             in_streams,
             out_streams,
             PyBool_FromBool(isMic),
-            PyBool_FromBool(isSpeaker)
+            PyBool_FromBool(isSpeaker),
+            devices_id
             ));
     }
     free(audioDevices);
@@ -536,6 +616,69 @@ static PyObject* PyCoreAudio_setVolume(PyObject* self, PyObject* arg){
     return NULL;
 }
 
+static PyObject* PyCoreAudio_setVolumeForDevice(PyObject* self, PyObject* args) {
+    AudioDeviceID deviceID;
+    int volume_in_percent;
+
+    if (!PyArg_ParseTuple(args, "Ii", &deviceID, &volume_in_percent)) {
+        return NULL; // 参数解析失败
+    }
+
+    if (volume_in_percent < 0 || volume_in_percent > 100) {
+        PyErr_SetString(PyExc_Exception, "Value out of range [0;100]");
+        return NULL;
+    }
+
+    // 调用新创建的 setVolumeForDevice 函数
+    return PyBool_FromBool(setVolumeForDevice(deviceID, volume_in_percent));
+}
+
+static PyObject* PyCoreAudio_getVolumeForDevice(PyObject* self, PyObject* args) {
+    AudioDeviceID deviceID;
+
+    if (!PyArg_ParseTuple(args, "i", &deviceID)) {
+        return NULL; // 参数解析失败
+    }
+
+    // 调用新创建的 getVolumeForDevice 函数
+    int volume = getVolumeForDevice(deviceID);
+    if (volume == -1) {
+        PyErr_SetString(PyExc_Exception, "Failed to get volume for device");
+        return NULL;
+    }
+
+    return PyLong_FromLong(volume);
+}
+
+static PyObject* PyCoreAudio_setMuteForDevice(PyObject* self, PyObject* args) {
+    AudioDeviceID deviceID;
+    int mute;
+
+    if (!PyArg_ParseTuple(args, "iI", &deviceID, &mute)) {
+        return NULL; // 参数解析失败
+    }
+
+    // 调用 setMuteForDevice 函数
+    bool success = setMuteForDevice(deviceID, mute != 0);
+    return PyBool_FromLong(success);
+}
+
+static PyObject* PyCoreAudio_getMuteForDevice(PyObject* self, PyObject* args) {
+    AudioDeviceID deviceID;
+
+    if (!PyArg_ParseTuple(args, "i", &deviceID)) {
+        return NULL; // 参数解析失败
+    }
+
+    // 调用 getMuteForDevice 函数
+    int muteStatus = getMuteForDevice(deviceID);
+    if (muteStatus == -1) {
+        PyErr_SetString(PyExc_Exception, "Failed to get mute status for device");
+        return NULL;
+    }
+
+    return PyLong_FromLong(muteStatus);
+}
 static PyMethodDef PyCoreAudioMethods[] = {
     {"init",  PyCoreAudio_init, METH_NOARGS,
         "Initialize the module. Finds and selects the currently selected audio output device.\n"
@@ -601,7 +744,10 @@ static PyMethodDef PyCoreAudioMethods[] = {
     {"getCurrentDevice", PyCoreAudio_getCurrentDevice, METH_NOARGS,
         "Get the name of the current audio output device.\n"
         "If the module is not initialized, an exception will be raised."},
-
+    {"setVolumeForDevice", PyCoreAudio_setVolumeForDevice, METH_VARARGS, "Set volume level of a specified output device."},
+    {"getVolumeForDevice", PyCoreAudio_getVolumeForDevice, METH_VARARGS, "Get volume level of a specified output device."},
+    {"setMuteForDevice", PyCoreAudio_setMuteForDevice, METH_VARARGS, "Set mute status of a specified output device."},
+    {"getMuteForDevice", PyCoreAudio_getMuteForDevice, METH_VARARGS, "Get mute status of a specified output device."},
     {NULL, NULL, 0, NULL}        /* Sentinel */
 };
 
